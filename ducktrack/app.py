@@ -12,7 +12,13 @@ from pynput import mouse
 
 # Import AppKit for macOS specific window fetching
 if system() == "Darwin":
-    from AppKit import NSWorkspace
+    try:
+        from AppKit import NSWorkspace
+        from AppKit import NSEvent
+    except ImportError:
+        print("ERROR: PyObjC (AppKit) not found. App focus/keyboard recording may not work on macOS.")
+        NSWorkspace = None
+        NSEvent = None
 
 from .obs_client import close_obs, is_obs_running, open_obs
 from .playback import Player, get_latest_recording
@@ -266,8 +272,8 @@ class MainInterface(QWidget):
              return
 
         try:
-            window_title = ""
-            app_name = "Unknown"
+            window_title = "" # Default/placeholder
+            app_name = "Unknown" # Default
 
             # Use AppKit for macOS
             if system() == "Darwin":
@@ -275,32 +281,28 @@ class MainInterface(QWidget):
                     workspace = NSWorkspace.sharedWorkspace()
                     active_app = workspace.frontmostApplication()
                     if active_app:
-                        app_name = active_app.localizedName()
-                        # Getting window title requires more complex accessibility API interaction
-                        # For now, let's focus on getting the app name reliably.
-                        # We can refine window title fetching later if needed.
-                        # Simplified: Use app name as placeholder title if real title is hard.
-                        window_title = app_name
+                        bundle_id = active_app.bundleIdentifier()
+                        loc_name = active_app.localizedName()
+                        app_name = bundle_id or loc_name or "Unknown"
+                        window_title = "" # Keep blank for now
+                    else:
+                        app_name = "Unknown"
+                        window_title = ""
                 except Exception as e:
-                    print(f"Error getting active app info via AppKit: {e}")
+                    app_name = "ErrorFetchingAppName"
+                    window_title = ""
             # else:
-                # Potentially add back pygetwindow or other methods for Windows/Linux here
-                # For now, non-macOS will report Unknown/empty string
-                # active_window = gw.getActiveWindow()
-                # window_title = active_window.title if active_window else ""
+                # Handle other OS if needed
 
-            # Check if app or title changed
-            current_focus = (app_name, window_title)
-            last_focus = getattr(self, '_last_focus_info', (None, None))
+            # Check if app name changed
+            current_focus_app = app_name
+            last_focus_app = getattr(self, '_last_focus_app', None)
 
-            if current_focus != last_focus:
-                self._last_focus_info = current_focus # Store tuple
-
-                # Restore mouse position fetching
+            if current_focus_app != last_focus_app:
+                self._last_focus_app = current_focus_app 
                 mouse_pos = mouse.Controller().position
                 mouse_x, mouse_y = mouse_pos[0], mouse_pos[1]
 
-                # Send event data to the recorder thread
                 event_data = {
                     "window_title": window_title,
                     "app_name": app_name,
@@ -314,11 +316,10 @@ class MainInterface(QWidget):
                     Q_ARG(dict, event_data)
                 )
 
-        except AttributeError: # Catch potential AttributeError from mouse.Controller()
-            # pynput might not be fully initialized yet
+        except AttributeError: 
             return
         except Exception as e:
-            print(f"Error polling UI state: {e}")
+            pass # Silently ignore other polling errors for now
 
 def resource_path(relative_path: str) -> str:
     if hasattr(sys, '_MEIPASS'):
